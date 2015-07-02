@@ -1,0 +1,4 @@
+list :=  ( list )
+       |  itemList
+
+itemList := item list | E  
