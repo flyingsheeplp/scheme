@@ -81,13 +81,20 @@ void dumpArgList(expr argList){
 
 void dumpEnv(env e){
 	int count = 0;
-	scheme_log("-------------------------dumpENV BEGIN--------------------------------");
+	
 	while(e){
-		scheme_log("envEntry[%d]:  [%s:%s]",count,e->symbol,exprType[e->e->type]);
-		e = e->next;
+		scheme_log("-------------------------dump env[%d] BEGIN-------------------------",count);
+		envEntry ent = e->entry;
+		int entryCount = 0;
+		while(ent){
+			scheme_log("envEntry[%d]:  [%s:%s]",entryCount,ent->symbol,exprType[ent->e->type]);
+			e = e->next;
+			entryCount++;
+		}
 		count++;
+		scheme_log("-------------------------dump env[%d] END---------------------------",count);
 	}
-	scheme_log("-------------------------dumpENV END--------------------------------");
+	
 }
 
 
@@ -96,24 +103,46 @@ void dumpEnv(env e){
 /**********************begin of environment****************************************/
 env global_env = NULL;
 
-void installSymbol(char* symbol,expr exp,env* e){
-	scheme_log("installSymbol:%s",symbol);
-	envEntry entry = (envEntry)schemeMalloc(sizeof(struct _env));
-	entry->symbol = strdup(symbol);
-	entry->e = exp;
-	entry->next = *e;
+env createEnv(env top){
+	env e = (env)schemeMalloc(sizeof(struct _env));
+	e->entry = NULL;
+	e->next = top;
+	return e;
+}
 
-	*e = entry;
+void releaseEnv(env e){
+	envEntry entry = e->entry;
+	envEntry save = NULL;
+	while(entry){
+		save = entry;
+		entry = entry->next;
+		free(save);
+	}
+}
+
+void installSymbol(char* symbol,expr exp,env e){
+	scheme_log("installSymbol:%s",symbol);
+	envEntry oldEntry = e->entry;
+	envEntry newEntry = (envEntry)schemeMalloc(sizeof(struct _envEntry));
+	newEntry->symbol = strdup(symbol);
+	newEntry->e = exp;
+	newEntry->next = oldEntry;
+
+	e->entry = newEntry;
 }
 
 void  installGlobalSymbol(char* symbol,expr e){
-	installSymbol(symbol,e,&global_env);
+	installSymbol(symbol,e,global_env);
 }
 
 expr lookupSymbol(char* symbol,env e){
 	while(e){
-		if(equal(e->symbol,symbol))
-			return e->e;
+		envEntry entry =  e->entry;
+		while(entry){
+			if(equal(entry->symbol,symbol))
+				return entry->e;
+			entry = entry->next;
+		}
 		e = e->next;
 	}
 	return NULL;
@@ -320,6 +349,36 @@ void printExpr(expr e){
 		case ESTRING:
 			printf("STRING Expr: %s\n",e->u.s);
 			break;
+		case EPROCEDURE:
+			printf("Procedure expr:%s\n",e->u.p->name);
+		default:
+			scheme_log("todo...");
+			break;
+	}
+}
+
+void releaseExpr(expr e){
+	if(!e){
+		printf("Null Expr do not need to release!\n");
+		return;
+	}
+	switch(e->type){
+		case EINTEGER:
+			printf("release integer expr\n");
+			break;
+		case EFUNCTION:
+			printf("release function expr\n");
+			break;
+		case EARGS:
+			break;
+		case EBOOLEAN:
+			printf("release boolean expr\n");
+			break;
+		case ESTRING:
+			printf("release boolean expr\n");
+			if(e->u.s)
+				free(e->u.s);
+			break;
 		default:
 			scheme_log("todo...");
 			break;
@@ -345,6 +404,43 @@ expr createIntegerExpr(int iValue){
 	e->type = EINTEGER;
 	e->u.iValue = iValue;
 	return e;
+}
+
+procedure createProcedure(char* name,int argc,procArg pArg,nodeList s){
+	procedure p = schemeMalloc(sizeof(struct _procedure));
+	p->name = strdup(name);
+	p->argc = argc;
+	p->argv = pArg;
+	p->body = s;
+	return p;
+}
+
+expr createProcedureExpr(char* name,int argc,procArg pArg,nodeList s){
+	expr e = schemeMalloc(sizeof(struct _expr));
+	e->type = EPROCEDURE;
+	e->u.p = createProcedure(name,argc,pArg,s);
+	return e;
+}
+
+procArg createProcArg(char* name){
+	procArg pa = schemeMalloc(sizeof(struct _procArg));
+	pa->argName = strdup(name);
+	pa->next = NULL;
+	return pa;
+}
+
+void addProcArg(procArg* old,procArg new){
+	procArg pa = *old;
+	if(*old == NULL){
+		*old = new;
+		return;
+	}
+
+	while(pa->next){
+		pa = pa->next;
+	}
+
+	pa->next = new;
 }
 
 expr createFunctionExpr(expr (*proc)(int,char**)){
@@ -427,12 +523,26 @@ expr apply(expr func_name,expr args_list){
 	return res;
 }
 
-expr applyProcedure();
+expr applyProcedure(expr procedure,env* e){
+	if(procedure->type != EPROCEDURE)
+		error("apply procedure falied!");
+
+	nodeList s =  procedure->u.p->body;
+	expr r;
+	while(s){
+		r = eval(s,e);
+		if(s->next && r)
+			releaseExpr(r);
+		s = s->next;
+	}
+	return r;
+}
 
 
 #define isDefine(n) (!strcmp((n)->u.symbol,"define"))
 #define isIf(n) (!strcmp((n)->u.symbol,"if"))
 #define isTrue(n) (((n)->type)==EBOOLEAN && ((n)->u.bValue==1))
+#define isDefun(n) (!strcmp((n)->u.symbol,"defun"))
 
 expr eval(nodeList nList,env* e){
 	printf("\n\n\n\n\n\n");
@@ -447,9 +557,13 @@ expr eval(nodeList nList,env* e){
 			struct node* n = nList;
 			advance(n);
 			struct node* var = n;
+			if(var->type != SYMBOL){
+				scheme_log("variable except symbol!");
+				return NULL;
+			}
 			advance(n);
 			printNode(n);
-			installSymbol(var->u.symbol,eval(n,e),e);
+			installSymbol(var->u.symbol,eval(n,e),*e);
 			return createStringExpr("Done");
 		}
 		else if(isIf(nList)){
@@ -467,6 +581,30 @@ expr eval(nodeList nList,env* e){
 			}else{
 				return eval(alter,e);
 			}
+		}
+		else if(isDefun(nList)){
+			scheme_log("start eval defun");
+			struct node* n = nList;
+			advance(n);
+			// here to consturct procedure
+			struct node* def = n;
+			int argc = 0;
+			if(def->type != LIST){
+				error("Define function need list head!");
+			}
+			struct node* def_start = def->u.nList;
+			procArg pArg = NULL;
+			char* proc_name =  def_start->u.symbol;
+			advance(def_start);
+			while(def_start){
+				argc++;
+				procArg pa = createProcArg(def_start->u.symbol);
+				addProcArg(&pArg,pa);
+				def_start = def_start->next;
+			}
+			advance(n);
+			expr p = createProcedureExpr(proc_name,argc,pArg,n);
+			installSymbol(proc_name,p,*e);
 		}
 		else{
 			scheme_log("===========start eval symbol : %s",nList->u.symbol);
@@ -488,6 +626,28 @@ expr eval(nodeList nList,env* e){
 				}
 				dumpArgList(args_exp);
 				return apply(func_exp,args_exp);
+			}
+			else if(exp->type == EPROCEDURE){
+				scheme_log("===========start eval procedure===========");
+				struct node* n = nList;
+				expr proc_exp = exp;
+				procArg pa = proc_exp->u.p->argv;
+				int argc = proc_exp->u.p->argc;
+				int count = 0;
+				advance(n);
+				env new_env = createEnv(*e);
+				while(n){
+					count++;
+					if(count > argc)
+						error("Too many arguments");
+					installSymbol(pa->argName,eval(n,e),new_env);
+					advance(pa);
+					advance(n);
+				}
+				if(count < argc)
+					error("Too few arguments");
+
+				return applyProcedure(proc_exp,&new_env);
 			}
 			return exp;
 		}
@@ -527,6 +687,7 @@ expr greaterThan(int argc,char** argv){
 }
 
 void initializeGlobalEnv(){
+	global_env = createEnv(NULL);
 	installGlobalSymbol("+",createFunctionExpr(addProc));
 	installGlobalSymbol(">",createFunctionExpr(greaterThan));
 }
@@ -557,10 +718,13 @@ void repl(){
 	}
 }
 
+//#define DEBUG_APPLY_PROCEDURE
 int main(int argc,char** argv){
+#if 1
 	initializeGlobalEnv();
 	repl();
-#if 0
+#endif
+#ifdef DEBUG_APPLY
 	initializeGlobalEnv();
 	expr e1 = createIntegerExpr(3);
 	expr e2 = createIntegerExpr(5);
@@ -579,5 +743,21 @@ int main(int argc,char** argv){
 	expr res = apply(func,e3);
 	printExpr(res);
 #endif
+#ifdef DEBUG_APPLY_PROCEDURE
+	initializeGlobalEnv();
+	env e = createEnv(global_env);
+	installSymbol("x",createIntegerExpr(3),e);
+	installSymbol("y",createIntegerExpr(4),e);
+	nodeList nl = NULL;
+	addToNodeList(&nl,createNode(SYMBOL,createToken("+")));
+	addToNodeList(&nl,createNode(SYMBOL,createToken("x")));
+	addToNodeList(&nl,createNode(SYMBOL,createToken("y")));
+	procArg arg1 = createProcArg("x");
+	procArg arg2 = createProcArg("y");
+	addProcArg(&arg1,arg2);
+	expr p = createProcedureExpr("myadd",2,arg1,createListNode(nl));
+	expr res = applyProcedure(p,&e);
+	printExpr(res);
 	return 0;
+#endif
 }

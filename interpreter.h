@@ -59,7 +59,8 @@ typedef struct _expr* expr;
 typedef struct _arg* arg;
 typedef struct token* tokenList;
 typedef struct node* nodeList;
-
+typedef struct _procArg* procArg;
+typedef struct _procedure* procedure;
 
 struct token{
 	char* symbol;
@@ -83,9 +84,16 @@ struct _arg{
 	struct _arg* next;
 };
 
+struct _procArg{
+	char* argName;
+	struct _procArg* next;
+};
+
 struct _procedure{
 	char* name;
-
+	int argc;
+	procArg argv;
+	nodeList body;
 };
 
 
@@ -107,13 +115,15 @@ struct _envEntry{
 	struct _envEntry* next;
 };
 
-typedef struct _env* envEntry;
+typedef struct _envEntry* envEntry;
 
 struct _env{
-	envEntry e;
+	envEntry entry;
 	struct _env* next;
 };
 
 typedef struct _env* env;
 
+
+expr eval(nodeList,env*);
 #endif
