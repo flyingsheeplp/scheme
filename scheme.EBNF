@@ -2,3 +2,9 @@ list :=  ( list )
        |  itemList
 
 itemList := item list | E  
+
+
+keywords:
+	define
+	if
+	defun
